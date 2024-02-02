@@ -1,0 +1,176 @@
+			+-------------------------+
+			|        CS 318           |
+			| PROJECT 0: Getting Real |
+			|     DESIGN DOCUMENT     |
+			+-------------------------+
+				   
+---- AUTHOR ----
+
+>> Fill in your name and email address.
+
+Andreas Jaramillo ajarami6@jh.edu
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			     Booting Pintos
+			     ==============
+
+---- QUESTIONS ---- 
+>> Put the screenshots of Pintos running in src/p0.
+>> A1: Is there any particular issue that you would like us to know?
+
+			     Debugging
+			     =========
+
+---- QUESTIONS: BIOS ---- 
+>> B1: What is the first instruction that gets executed?
+	ljmp is the first instruction 
+>> B2: At which physical address is this instruction located?
+	$0x3630,$0xf000e05b is the offset where $0x3630 is the hex hash associated with a code
+segment. $0xf000e05b is the offset then that we start at within the code segment
+>> B3: Can you guess why the first instruction is like this?
+	Since we are on boot and we will have many code segments together, we need to know essentially
+where to start, and so we use a Global table in order to split up by code segments and an offset
+in order to index by instruction
+>> B4: What are the next three instructions?
+the next three instructions are: 
+	  0xfe05b: cmpw   $0xffc8,%cs:(%esi)
+	 0xfe062: jne    0xd241d0b0
+	 0xfe066: xor    %edx,%edx
+---- QUESTIONS: BOOTLOADER ---- 
+>> B5: How does the bootloader read disk sectors? In particular, what BIOS interrupt
+is used?
+read_mbr:
+        sub %ebx, %ebx                  # Sector 0.
+        mov $0x2000, %ax                # Use 0x20000 for buffer.
+        mov %ax, %es
+        call read_sector
+        jc no_such_drive
+
+        # Print hd[a-z].
+        call puts
+        .string " hd"
+        mov %dl, %al
+        add $'a' - 0x80, %al
+        call putc
+
+        # Check for MBR signature--if not present, it's not a
+        # partitioned hard disk.
+        cmpw $0xaa55, %es:510
+        jne next_drive
+
+        mov $446, %si                   # Offset of partition table entry 1.
+        mov $'1', %al
+This is the function where we read it in. After reading from the partition table, it attempts 
+to load it with the read_sector, and then checks if there is an MBR signature. This is to 
+ensure that it is actually partitioned from the hard disk. If not, then we move onto the next
+partition to see if it is valid. The BIOS interrupt for this routine can be seen below which 
+appears right before 
+
+# Configure serial port so we can report progress without connected VGA.
+# See [IntrList] for details.
+        sub %dx, %dx                    # Serial port 0.
+        mov $0xe3, %al                  # 9600 bps, N-8-1.
+                                        # AH is already 0 (Initialize Port).
+        int $0x14                       # Destroys AX.
+
+        call puts
+        .string "Pintos"
+Specifically, "int $0x14" is the BIOS hardware interrupt that handles serial port services, 
+which is needed to read from the table right after.
+
+>> B6: How does the bootloader decides whether it successfully finds the Pintos kernel?
+	Each sector is at a given address, and the kernel is always at the same.
+From these instructions:
+        # Is it a Pintos kernel partition?
+        cmpb $0x20, %es:4(%si)
+        jne next_partition
+And as stated in the comments before, the kernel is always at $0x20, so we just check if the
+current sector is matched with this correct offset. If so, then we are looking at the
+kernel, and we can move on into loading the kernel.	
+>> B7: What happens when the bootloader could not find the Pintos kernel?
+	        # Is it a Pintos kernel partition?
+        cmpb $0x20, %es:4(%si)
+        jne next_partition
+Using the same code snippet from before, if it does not find the Pintos kernel in that
+iteration, it moves onto the next partition in the table
+
+>> B8: At what point and how exactly does the bootloader transfer control to the Pintos kernel?
+
+#### Transfer control to the kernel that we loaded.  We read the start
+#### address out of the ELF header (see [ELF1]) and convert it from a
+#### 32-bit linear address into a 16:16 segment:offset address for
+#### real mode, then jump to the converted address.  The 80x86 doesn't
+#### have an instruction to jump to an absolute segment:offset kept in
+#### registers, so in fact we store the address in a temporary memory
+#### location, then jump indirectly through that location.  To save 4
+#### bytes in the loader, we reuse 4 bytes of the loader's code for
+#### this temporary pointer.
+
+        mov $0x2000, %ax
+        mov %ax, %es
+        mov %es:0x18, %dx
+        mov %dx, start
+        movw $0x2000, start + 2
+        ljmp *start
+Here is where we transfer control to the Pintos kernel. It is done by converting the 
+32-bit address into a 16:16 segment:offset address whuch is what is read for real
+mode. Essentially, we segment the address so there is a partition of addresses that are
+only used by the kernel.
+	
+---- QUESTIONS: KERNEL ---- 
+>> B9: At the entry of pintos_init(), what is the value of expression 
+init_page_dir[pd_no(ptov(0))] in hexadecimal format?
+	 0x102007 
+	This is within paging_init function at the line  pd[pde_idx] = pde_create (pt);
+since we are looking for the first page, and this only executes on the first page due to the 
+if statement above it.
+>> B10: When palloc_get_page() is called for the first time,
+
+>> B10.1 what does the call stack look like?
+	Current call stack (found from the backtrace):
+#0  0xc00203a3 in paging_init () at ../../threads/init.c:168
+#1  0xc002031b in pintos_init () at ../../threads/init.c:100
+#2  0xc002013d in start () at ../../threads/start.S:180
+>> B10.2 what is the return value in hexadecimal format?
+	The return value was set to pd and init_page_dir, which is
+	HEX: 0xc002e890
+
+>> B10.3 what is the value of expression init_page_dir[pd_no(ptov(0))] in hexadecimal format?
+=> 0xc000ef8f:  int3
+=> 0xc000ef8f:  int3
+>> B11: When palloc_get_page() is called for the third time,
+
+>> B11.1 what does the call stack look like?
+	The call stack did not change
+>> B11.2 what is the return value in hexadecimal format?
+	eax            0x3e0    992
+	It has a return value of '992'
+>> B11.3 what is the value of expression init_page_dir[pd_no(ptov(0))] in hexadecimal format?
+	 HEX:  0x102007
+			     Kernel Monitor
+			     ==============
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+	No changes to structs, global or static variables, typedefs, or enumerations
+were made.
+---- ALGORITHMS ----
+>> C2: Explain how you read and write to the console for the kernel monitor.
+	To read, I used the input_getc() command which would read in one uint8t at a
+time. I then check to see if that character they entered is in the new line, then
+I know that they finished a phrase. In order to write to the console, i simply used
+the "printf" found in pintos/src/lib/stdlib.h, knowing that this came from here and not 
+the standard C library.
+
+>> C3: Any additional enhancement you implement?
